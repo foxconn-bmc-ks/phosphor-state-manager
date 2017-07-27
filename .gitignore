@@ -28,7 +28,7 @@ Makefile.in
 /stamp-h1
 
 # https://www.gnu.org/software/libtool/
-
+/libtool
 /ltmain.sh
 
 # http://www.gnu.org/software/texinfo
@@ -44,6 +44,8 @@ Makefile.in
 /phosphor-host-state-manager
 /phosphor-chassis-state-manager
 /phosphor-bmc-state-manager
+/phosphor-discover-system-state
+/phosphor-host-check
 Makefile
 .deps
 *-libtool

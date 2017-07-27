@@ -14,8 +14,11 @@ namespace server = sdbusplus::xyz::openbmc_project::State::server;
 
 using namespace phosphor::logging;
 
-constexpr auto CHASSIS_STATE_POWEROFF_TGT = "obmc-power-chassis-off@0.target";
-constexpr auto CHASSIS_STATE_POWERON_TGT = "obmc-power-chassis-on@0.target";
+constexpr auto CHASSIS_STATE_POWEROFF_TGT = "obmc-chassis-poweroff@0.target";
+constexpr auto CHASSIS_STATE_POWERON_TGT = "obmc-chassis-poweron@0.target";
+
+constexpr auto ACTIVE_STATE = "active";
+constexpr auto ACTIVATING_STATE = "activating";
 
 /* Map a transition to it's systemd target */
 const std::map<server::Chassis::Transition,std::string> SYSTEMD_TARGET_TABLE =
@@ -27,6 +30,9 @@ const std::map<server::Chassis::Transition,std::string> SYSTEMD_TARGET_TABLE =
 constexpr auto SYSTEMD_SERVICE   = "org.freedesktop.systemd1";
 constexpr auto SYSTEMD_OBJ_PATH  = "/org/freedesktop/systemd1";
 constexpr auto SYSTEMD_INTERFACE = "org.freedesktop.systemd1.Manager";
+
+constexpr auto SYSTEMD_PROPERTY_IFACE = "org.freedesktop.DBus.Properties";
+constexpr auto SYSTEMD_INTERFACE_UNIT = "org.freedesktop.systemd1.Unit";
 
 void Chassis::subscribeToSystemdSignals()
 {
@@ -91,34 +97,80 @@ void Chassis::executeTransition(Transition tranReq)
     return;
 }
 
-int Chassis::sysStateChangeSignal(sd_bus_message *msg, void *userData,
-                                  sd_bus_error *retError)
+bool Chassis::stateActive(const std::string& target)
 {
-    return static_cast<Chassis*>(userData)->sysStateChange(msg, retError);
+    sdbusplus::message::variant<std::string> currentState;
+    sdbusplus::message::object_path unitTargetPath;
+
+    auto method = this->bus.new_method_call(SYSTEMD_SERVICE,
+                                            SYSTEMD_OBJ_PATH,
+                                            SYSTEMD_INTERFACE,
+                                            "GetUnit");
+
+    method.append(target);
+    auto result = this->bus.call(method);
+
+    //Check that the bus call didn't result in an error
+    if(result.is_method_error())
+    {
+        log<level::ERR>("Error in bus call - could not resolve GetUnit for:",
+                        entry(" %s", SYSTEMD_INTERFACE));
+        return false;
+    }
+
+    result.read(unitTargetPath);
+
+    method = this->bus.new_method_call(SYSTEMD_SERVICE,
+                                       static_cast<const std::string&>
+                                           (unitTargetPath).c_str(),
+                                       SYSTEMD_PROPERTY_IFACE,
+                                       "Get");
+
+    method.append(SYSTEMD_INTERFACE_UNIT, "ActiveState");
+    result = this->bus.call(method);
+
+    //Check that the bus call didn't result in an error
+    if(result.is_method_error())
+    {
+        log<level::ERR>("Error in bus call - could not resolve Get for:",
+                        entry(" %s", SYSTEMD_PROPERTY_IFACE));
+        return false;
+    }
+
+    result.read(currentState);
+
+    if(currentState != ACTIVE_STATE && currentState != ACTIVATING_STATE)
+    {
+        //False - not active
+        return false;
+    }
+    //True - active
+    return true;
+
 }
 
-int Chassis::sysStateChange(sd_bus_message* msg,
-                            sd_bus_error* retError)
+int Chassis::sysStateChange(sdbusplus::message::message& msg)
 {
     uint32_t newStateID {};
     sdbusplus::message::object_path newStateObjPath;
     std::string newStateUnit{};
     std::string newStateResult{};
 
-    auto sdPlusMsg = sdbusplus::message::message(msg);
     //Read the msg and populate each variable
-    sdPlusMsg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
+    msg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
 
     if((newStateUnit == CHASSIS_STATE_POWEROFF_TGT) &&
-       (newStateResult == "done"))
+       (newStateResult == "done") &&
+       (!stateActive(CHASSIS_STATE_POWERON_TGT)))
     {
-        log<level::INFO>("Recieved signal that power OFF is complete");
+        log<level::INFO>("Received signal that power OFF is complete");
         this->currentPowerState(server::Chassis::PowerState::Off);
     }
     else if((newStateUnit == CHASSIS_STATE_POWERON_TGT) &&
-            (newStateResult == "done"))
+            (newStateResult == "done") &&
+            (stateActive(CHASSIS_STATE_POWERON_TGT)))
      {
-         log<level::INFO>("Recieved signal that power ON is complete");
+         log<level::INFO>("Received signal that power ON is complete");
          this->currentPowerState(server::Chassis::PowerState::On);
      }
 

@@ -122,31 +122,23 @@ void BMC::executeTransition(const Transition tranReq)
                                             SYSTEMD_OBJ_PATH,
                                             SYSTEMD_INTERFACE,
                                             "StartUnit");
-
-    method.append(sysdUnit, "replace");
+    // The only valid transition is reboot and that
+    // needs to be irreversible once started
+    method.append(sysdUnit, "replace-irreversibly");
 
     this->bus.call(method);
-
     return;
 }
 
-int BMC::bmcStateChangeSignal(sd_bus_message *msg, void *userData,
-                              sd_bus_error *retError)
-{
-    return static_cast<BMC*>(userData)->bmcStateChange(msg, retError);
-}
-
-int BMC::bmcStateChange(sd_bus_message *msg,
-                        sd_bus_error *retError)
+int BMC::bmcStateChange(sdbusplus::message::message& msg)
 {
     uint32_t newStateID {};
     sdbusplus::message::object_path newStateObjPath;
     std::string newStateUnit{};
     std::string newStateResult{};
 
-    auto sdPlusMsg = sdbusplus::message::message(msg);
     //Read the msg and populate each variable
-    sdPlusMsg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
+    msg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
 
     //Caught the signal that indicates the BMC is now BMC_READY
     if((newStateUnit == obmcStandbyTarget) &&

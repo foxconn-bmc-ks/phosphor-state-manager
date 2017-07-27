@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <sdbusplus/bus.hpp>
 #include "xyz/openbmc_project/State/Chassis/server.hpp"
 
@@ -10,13 +11,16 @@ namespace state
 namespace manager
 {
 
+using ChassisInherit = sdbusplus::server::object::object<
+        sdbusplus::xyz::openbmc_project::State::server::Chassis>;
+namespace sdbusRule = sdbusplus::bus::match::rules;
+
 /** @class Chassis
  *  @brief OpenBMC chassis state management implementation.
  *  @details A concrete implementation for xyz.openbmc_project.State.Chassis
  *  DBus API.
  */
-class Chassis : public sdbusplus::server::object::object<
-                sdbusplus::xyz::openbmc_project::State::server::Chassis>
+class Chassis : public ChassisInherit
 {
     public:
         /** @brief Constructs Chassis State Manager
@@ -32,17 +36,16 @@ class Chassis : public sdbusplus::server::object::object<
         Chassis(sdbusplus::bus::bus& bus,
                 const char* busName,
                 const char* objPath) :
-                sdbusplus::server::object::object<
-                    sdbusplus::xyz::openbmc_project::State::server::Chassis>(
-                            bus, objPath, true),
+                ChassisInherit(bus, objPath, true),
                 bus(bus),
                 systemdSignals(bus,
-                               "type='signal',"
-                               "member='JobRemoved',"
-                               "path='/org/freedesktop/systemd1',"
-                               "interface='org.freedesktop.systemd1.Manager'",
-                                sysStateChangeSignal,
-                                this)
+                               sdbusRule::type::signal() +
+                               sdbusRule::member("JobRemoved") +
+                               sdbusRule::path("/org/freedesktop/systemd1") +
+                               sdbusRule::interface(
+                                    "org.freedesktop.systemd1.Manager"),
+                               std::bind(std::mem_fn(&Chassis::sysStateChange),
+                                         this, std::placeholders::_1))
         {
             subscribeToSystemdSignals();
 
@@ -80,18 +83,17 @@ class Chassis : public sdbusplus::server::object::object<
          */
         void executeTransition(Transition tranReq);
 
-        /** @brief Callback function on systemd state changes
+        /**
+         * @brief Determine if target is active
          *
-         * Will just do a call into the appropriate object for processing
+         * This function determines if the target is active and
+         * helps prevent misleading log recorded states.
          *
-         * @param[in]  msg       - Data associated with subscribed signal
-         * @param[in]  userData  - Pointer to this object instance
-         * @param[out] retError  - Not used but required with signal API
+         * @param[in] target - Target string to check on
          *
-         */
-        static int sysStateChangeSignal(sd_bus_message* msg,
-                                        void* userData,
-                                        sd_bus_error* retError);
+         * @return boolean corresponding to state active
+         **/
+        bool stateActive(const std::string& target);
 
         /** @brief Check if systemd state change is relevant to this object
          *
@@ -99,17 +101,15 @@ class Chassis : public sdbusplus::server::object::object<
          * change
          *
          * @param[in]  msg       - Data associated with subscribed signal
-         * @param[out] retError  - Not used but required with signal API
          *
          */
-        int sysStateChange(sd_bus_message* msg,
-                           sd_bus_error* retError);
+        int sysStateChange(sdbusplus::message::message& msg);
 
         /** @brief Persistent sdbusplus DBus connection. */
         sdbusplus::bus::bus& bus;
 
         /** @brief Used to subscribe to dbus systemd signals **/
-        sdbusplus::server::match::match systemdSignals;
+        sdbusplus::bus::match_t systemdSignals;
 };
 
 } // namespace manager
