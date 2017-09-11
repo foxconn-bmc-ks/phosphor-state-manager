@@ -3,7 +3,13 @@
 #include <string>
 #include <functional>
 #include <sdbusplus/bus.hpp>
+#include <phosphor-logging/log.hpp>
+#include <xyz/openbmc_project/State/Boot/Progress/server.hpp>
+#include <xyz/openbmc_project/Control/Boot/RebootAttempts/server.hpp>
+#include <xyz/openbmc_project/State/OperatingSystem/Status/server.hpp>
 #include "xyz/openbmc_project/State/Host/server.hpp"
+#include "settings.hpp"
+#include "config.h"
 
 namespace phosphor
 {
@@ -13,7 +19,13 @@ namespace manager
 {
 
 using HostInherit = sdbusplus::server::object::object<
-        sdbusplus::xyz::openbmc_project::State::server::Host>;
+        sdbusplus::xyz::openbmc_project::State::server::Host,
+        sdbusplus::xyz::openbmc_project::State::Boot::server::Progress,
+        sdbusplus::xyz::openbmc_project::Control::Boot::server::RebootAttempts,
+        sdbusplus::xyz::openbmc_project::State::OperatingSystem::server::Status>;
+
+using namespace phosphor::logging;
+
 namespace sdbusRule = sdbusplus::bus::match::rules;
 
 /** @class Host
@@ -47,13 +59,16 @@ class Host : public HostInherit
                         sdbusRule::interface(
                                 "org.freedesktop.systemd1.Manager"),
                         std::bind(std::mem_fn(&Host::sysStateChange),
-                                  this, std::placeholders::_1))
+                                  this, std::placeholders::_1)),
+                settings(bus)
         {
             // Enable systemd signals
             subscribeToSystemdSignals();
 
             // Will throw exception on fail
             determineInitialState();
+
+            attemptsLeft(BOOT_COUNT_MAX_ALLOWED);
 
             // We deferred this until we could get our property correct
             this->emit_object_added();
@@ -64,6 +79,28 @@ class Host : public HostInherit
 
         /** @brief Set value of CurrentHostState */
         HostState currentHostState(HostState value) override;
+
+        /**
+         * @brief Set host reboot count to default
+         *
+         * OpenBMC software controls the number of allowed reboot attempts so
+         * any external set request of this property will be overridden by
+         * this function and set to the default.
+         *
+         * The only code responsible for decrementing the boot count resides
+         * within this process and that will use the sub class interface
+         * directly
+         *
+         * @param[in] value      - Reboot count value, will be ignored
+         *
+         * @return Default number of reboot attempts left
+         */
+        uint32_t attemptsLeft(uint32_t value) override
+        {
+            log<level::DEBUG>("External request to reset reboot count");
+            return (sdbusplus::xyz::openbmc_project::Control::Boot::server::
+                    RebootAttempts::attemptsLeft(BOOT_COUNT_MAX_ALLOWED));
+        }
 
     private:
         /**
@@ -104,13 +141,6 @@ class Host : public HostInherit
         bool stateActive(const std::string& target);
 
         /**
-         * @brief Set the HOST BOOTCOUNT Sensor value
-         *
-         * @param[in] bootCount  - new BOOTCOUNT value
-         */
-        void setHostbootCount(int bootCount);
-
-        /**
          * @brief Determine if auto reboot flag is set
          *
          * @return boolean corresponding to current auto_reboot setting
@@ -127,11 +157,30 @@ class Host : public HostInherit
          */
         void sysStateChange(sdbusplus::message::message& msg);
 
+        /** @brief Determine whether restoring of host requested state is enabled
+         *
+         * @return boolean corresponding to restore setting
+         */
+        bool getStateRestoreSetting() const;
+
+        /** @brief Decrement reboot count
+         *
+         * This is used internally to this application to decrement the boot
+         * count on each boot attempt. The host will use the external
+         * attemptsLeft() interface to reset the count when a boot is successful
+         *
+         * @return number of reboot count attempts left
+         */
+        uint32_t decrementRebootCount();
+
         /** @brief Persistent sdbusplus DBus bus connection. */
         sdbusplus::bus::bus& bus;
 
         /** @brief Used to subscribe to dbus systemd signals **/
         sdbusplus::bus::match_t systemdSignals;
+
+        // Settings objects of interest
+        settings::Objects settings;
 };
 
 } // namespace manager

@@ -4,7 +4,14 @@
 #include <systemd/sd-bus.h>
 #include <sdbusplus/server.hpp>
 #include <phosphor-logging/log.hpp>
+#include <phosphor-logging/elog-errors.hpp>
+#include <experimental/filesystem>
+#include <xyz/openbmc_project/Control/Power/RestorePolicy/server.hpp>
+#include <xyz/openbmc_project/Common/error.hpp>
 #include "host_state_manager.hpp"
+#include "host_state_serialize.hpp"
+#include "config.h"
+
 
 namespace phosphor
 {
@@ -13,10 +20,12 @@ namespace state
 namespace manager
 {
 
-// When you see server:: you know we're referencing our base class
+// When you see server:: or reboot:: you know we're referencing our base class
 namespace server = sdbusplus::xyz::openbmc_project::State::server;
+namespace reboot = sdbusplus::xyz::openbmc_project::Control::Boot::server;
 
 using namespace phosphor::logging;
+namespace fs = std::experimental::filesystem;
 
 // host-shutdown notifies host of shutdown and that leads to host-stop being
 // called so initiate a host shutdown with the -shutdown target and consider the
@@ -24,6 +33,7 @@ using namespace phosphor::logging;
 constexpr auto HOST_STATE_SOFT_POWEROFF_TGT = "obmc-host-shutdown@0.target";
 constexpr auto HOST_STATE_POWEROFF_TGT = "obmc-host-stop@0.target";
 constexpr auto HOST_STATE_POWERON_TGT = "obmc-host-start@0.target";
+constexpr auto HOST_STATE_REBOOT_TGT = "obmc-host-reboot@0.target";
 constexpr auto HOST_STATE_QUIESCE_TGT = "obmc-host-quiesce@0.target";
 
 constexpr auto ACTIVE_STATE = "active";
@@ -33,7 +43,8 @@ constexpr auto ACTIVATING_STATE = "activating";
 const std::map<server::Host::Transition,std::string> SYSTEMD_TARGET_TABLE =
 {
         {server::Host::Transition::Off, HOST_STATE_SOFT_POWEROFF_TGT},
-        {server::Host::Transition::On, HOST_STATE_POWERON_TGT}
+        {server::Host::Transition::On, HOST_STATE_POWERON_TGT},
+        {server::Host::Transition::Reboot, HOST_STATE_REBOOT_TGT}
 };
 
 constexpr auto SYSTEMD_SERVICE   = "org.freedesktop.systemd1";
@@ -44,15 +55,8 @@ constexpr auto MAPPER_BUSNAME = "xyz.openbmc_project.ObjectMapper";
 constexpr auto MAPPER_PATH = "/xyz/openbmc_project/object_mapper";
 constexpr auto MAPPER_INTERFACE = "xyz.openbmc_project.ObjectMapper";
 
-constexpr auto REBOOTCOUNTER_SERVICE("org.openbmc.Sensors");
-constexpr auto REBOOTCOUNTER_PATH("/org/openbmc/sensors/host/BootCount");
-constexpr auto REBOOTCOUNTER_INTERFACE("org.openbmc.SensorValue");
-
 constexpr auto SYSTEMD_PROPERTY_IFACE = "org.freedesktop.DBus.Properties";
 constexpr auto SYSTEMD_INTERFACE_UNIT = "org.freedesktop.systemd1.Unit";
-
-// TODO openbmc/openbmc#1646 - boot count needs to be defined in 1 place
-constexpr auto DEFAULT_BOOTCOUNT = 3;
 
 /* Map a system state to the HostState */
 const std::map<std::string, server::Host::HostState> SYS_HOST_STATE_TABLE = {
@@ -92,11 +96,49 @@ void Host::determineInitialState()
         server::Host::requestedHostTransition(Transition::Off);
     }
 
-    // Set transition initially to Off
-    // TODO - Eventually need to restore this from persistent storage
-    server::Host::requestedHostTransition(Transition::Off);
+    auto restore = getStateRestoreSetting();
+
+    if ((!restore) || (!deserialize(HOST_STATE_PERSIST_PATH, *this)))
+    {
+        //set to default value.
+        server::Host::requestedHostTransition(Transition::Off);
+    }
 
     return;
+}
+
+bool Host::getStateRestoreSetting() const
+{
+    using namespace settings;
+    using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+    using namespace sdbusplus::xyz::openbmc_project::Control::Power::server;
+
+    auto method =
+        bus.new_method_call(
+                settings.service(settings.powerRestorePolicy,
+                    powerRestoreIntf).c_str(),
+                settings.powerRestorePolicy.c_str(),
+                "org.freedesktop.DBus.Properties",
+                "Get");
+
+    method.append(powerRestoreIntf, "PowerRestorePolicy");
+    auto reply = bus.call(method);
+    if (reply.is_method_error())
+    {
+        log<level::ERR>("Error in PowerRestorePolicy Get");
+        elog<InternalFailure>();
+    }
+
+    sdbusplus::message::variant<std::string> result;
+    reply.read(result);
+    auto powerPolicy = result.get<std::string>();
+
+    if (RestorePolicy::Policy::Restore ==
+        RestorePolicy::convertPolicyFromString(powerPolicy))
+    {
+        return true;
+    }
+    return false;
 }
 
 void Host::executeTransition(Transition tranReq)
@@ -130,7 +172,7 @@ bool Host::stateActive(const std::string& target)
     auto result = this->bus.call(method);
 
     //Check that the bus call didn't result in an error
-    if(result.is_method_error())
+    if (result.is_method_error())
     {
         log<level::ERR>("Error in bus call - could not resolve GetUnit for:",
                         entry(" %s", SYSTEMD_INTERFACE));
@@ -149,7 +191,7 @@ bool Host::stateActive(const std::string& target)
     result = this->bus.call(method);
 
     //Check that the bus call didn't result in an error
-    if(result.is_method_error())
+    if (result.is_method_error())
     {
         log<level::ERR>("Error in bus call - could not resolve Get for:",
                         entry(" %s", SYSTEMD_PROPERTY_IFACE));
@@ -158,7 +200,7 @@ bool Host::stateActive(const std::string& target)
 
     result.read(currentState);
 
-    if(currentState != ACTIVE_STATE && currentState != ACTIVATING_STATE)
+    if (currentState != ACTIVE_STATE && currentState != ACTIVATING_STATE)
     {
         //False - not active
         return false;
@@ -167,95 +209,35 @@ bool Host::stateActive(const std::string& target)
     return true;
 }
 
-void Host::setHostbootCount(int bootCount)
-{
-    auto method = this->bus.new_method_call(REBOOTCOUNTER_SERVICE,
-                                            REBOOTCOUNTER_PATH,
-                                            REBOOTCOUNTER_INTERFACE,
-                                            "setValue");
-    sdbusplus::message::variant<int> newParam = bootCount;
-    method.append(newParam);
-    this->bus.call_noreply(method);
-}
-
 bool Host::isAutoReboot()
 {
-    sdbusplus::message::variant<std::string> autoRebootParam;
-    std::string strParam;
+    using namespace settings;
 
-    std::string HOST_PATH("/org/openbmc/settings/host0");
-    std::string HOST_INTERFACE("org.openbmc.settings.Host");
-
-    auto mapper = this->bus.new_method_call(MAPPER_BUSNAME,
-                                            MAPPER_PATH,
-                                            MAPPER_INTERFACE,
-                                            "GetObject");
-
-    mapper.append(HOST_PATH, std::vector<std::string>({HOST_INTERFACE}));
-    auto mapperResponseMsg = this->bus.call(mapper);
-
-    if (mapperResponseMsg.is_method_error())
-    {
-        log<level::ERR>("Error in mapper call");
-        return false;
-    }
-
-    std::map<std::string, std::vector<std::string>> mapperResponse;
-    mapperResponseMsg.read(mapperResponse);
-    if (mapperResponse.empty())
-    {
-        log<level::ERR>("Error reading mapper response");
-        return false;
-    }
-
-    const auto& host = mapperResponse.begin()->first;
-
-    auto method = this->bus.new_method_call(host.c_str(),
-                                            HOST_PATH.c_str(),
-                                            "org.freedesktop.DBus.Properties",
-                                            "Get");
-
-    method.append(HOST_INTERFACE.c_str(), "auto_reboot");
-    auto reply = this->bus.call(method);
-
+    auto method =
+        bus.new_method_call(
+                settings.service(settings.autoReboot, autoRebootIntf).c_str(),
+                settings.autoReboot.c_str(),
+                "org.freedesktop.DBus.Properties",
+                "Get");
+    method.append(autoRebootIntf, "AutoReboot");
+    auto reply = bus.call(method);
     if (reply.is_method_error())
     {
-        log<level::ERR>("Error in auto_reboot Get");
+        log<level::ERR>("Error in AutoReboot Get");
         return false;
     }
 
-    reply.read(autoRebootParam);
-    strParam =
-        sdbusplus::message::variant_ns::get<std::string>(autoRebootParam);
+    sdbusplus::message::variant<bool> result;
+    reply.read(result);
+    auto autoReboot = result.get<bool>();
+    auto rebootCounterParam = reboot::RebootAttempts::attemptsLeft();
 
-    if (strParam.empty())
+    if (autoReboot)
     {
-        log<level::ERR>("Error reading auto_reboot response");
-        return false;
-    }
-
-    sdbusplus::message::variant<int> rebootCounterParam = 0;
-    method = this->bus.new_method_call(REBOOTCOUNTER_SERVICE,
-                                       REBOOTCOUNTER_PATH,
-                                       REBOOTCOUNTER_INTERFACE,
-                                       "getValue");
-    reply = this->bus.call(method);
-    if (reply.is_method_error())
-    {
-        log<level::ERR>("Error in BOOTCOUNT getValue");
-        return false;
-    }
-    reply.read(rebootCounterParam);
-
-    if (strParam == "yes")
-    {
-        if( rebootCounterParam > 0)
+        if (rebootCounterParam > 0)
         {
             // Reduce BOOTCOUNT by 1
-            log<level::INFO>("Auto reboot enabled. "
-                             "Reducing HOST BOOTCOUNT by 1.");
-            Host::setHostbootCount((sdbusplus::message::variant_ns::
-                                    get<int>(rebootCounterParam)) - 1);
+            log<level::INFO>("Auto reboot enabled, rebooting");
             return true;
         }
         else if(rebootCounterParam == 0)
@@ -263,7 +245,7 @@ bool Host::isAutoReboot()
             // Reset reboot counter and go to quiesce state
             log<level::INFO>("Auto reboot enabled. "
                              "HOST BOOTCOUNT already set to 0.");
-            Host::setHostbootCount(DEFAULT_BOOTCOUNT);
+            attemptsLeft(BOOT_COUNT_MAX_ALLOWED);
             return false;
         }
         else
@@ -297,13 +279,6 @@ void Host::sysStateChange(sdbusplus::message::message& msg)
         log<level::INFO>("Received signal that host is off");
         this->currentHostState(server::Host::HostState::Off);
 
-        // Check if we need to start a new transition (i.e. a Reboot)
-        if(this->server::Host::requestedHostTransition() ==
-               Transition::Reboot)
-        {
-            log<level::DEBUG>("Reached intermediate state, going to next");
-            this->executeTransition(server::Host::Transition::On);
-        }
     }
     else if((newStateUnit == HOST_STATE_POWERON_TGT) &&
             (newStateResult == "done") &&
@@ -330,6 +305,16 @@ void Host::sysStateChange(sdbusplus::message::message& msg)
      }
 }
 
+uint32_t Host::decrementRebootCount()
+{
+    auto rebootCount = reboot::RebootAttempts::attemptsLeft();
+    if(rebootCount > 0)
+    {
+        return(reboot::RebootAttempts::attemptsLeft(rebootCount - 1));
+    }
+    return rebootCount;
+}
+
 Host::Transition Host::requestedHostTransition(Transition value)
 {
     log<level::INFO>(
@@ -337,25 +322,21 @@ Host::Transition Host::requestedHostTransition(Transition value)
             entry("REQUESTED_HOST_TRANSITION=%s",
                   convertForMessage(value).c_str()));
 
-    Transition tranReq = value;
-    if(value == server::Host::Transition::Reboot)
+    // If this is not a power off request then we need to
+    // decrement the reboot counter.  This code should
+    // never prevent a power on, it should just decrement
+    // the count to 0.  The quiesce handling is where the
+    // check of this count will occur
+    if(value != server::Host::Transition::Off)
     {
-        // On reboot requests we just need to do a off if we're on and
-        // vice versa.  The handleSysStateChange() code above handles the
-        // second part of the reboot
-        if(this->server::Host::currentHostState() ==
-            server::Host::HostState::Off)
-        {
-            tranReq = server::Host::Transition::On;
-        }
-        else
-        {
-            tranReq = server::Host::Transition::Off;
-        }
+        decrementRebootCount();
     }
 
-    executeTransition(tranReq);
-    return server::Host::requestedHostTransition(value);
+    executeTransition(value);
+
+    auto retVal =  server::Host::requestedHostTransition(value);
+    serialize(*this);
+    return retVal;
 }
 
 Host::HostState Host::currentHostState(HostState value)

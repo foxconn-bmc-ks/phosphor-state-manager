@@ -16,6 +16,8 @@ PKG_CHECK_MODULES([PHOSPHOR_DBUS_INTERFACES], [phosphor-dbus-interfaces],,\
     AC_MSG_ERROR(["Requires phosphor-dbus-interfaces package."]))
 PKG_CHECK_MODULES([SDBUSPLUS], [sdbusplus],,
     AC_MSG_ERROR(["Requires sdbusplus package."]))
+PKG_CHECK_MODULES([PHOSPHOR_LOGGING], [phosphor-logging],,\
+    AC_MSG_ERROR(["Requires phosphor-logging package."]))
 
 # Checks for typedefs, structures, and compiler characteristics.
 AX_CXX_COMPILE_STDCXX_14([noext])
@@ -51,6 +53,16 @@ AC_DEFINE_UNQUOTED([BMC_OBJPATH], ["$BMC_OBJPATH"], [The BMC state manager Dbus 
 AC_ARG_VAR(HOST_RUNNING_FILE, [File to create if host is running])
 AS_IF([test "x$HOST_RUNNING_FILE" == "x"], [HOST_RUNNING_FILE="/run/openbmc/host@%u-on"])
 AC_DEFINE_UNQUOTED([HOST_RUNNING_FILE], ["$HOST_RUNNING_FILE"], [File to create if host is running])
+
+AC_ARG_VAR(HOST_STATE_PERSIST_PATH, [Path of file for storing requested host state.])
+AS_IF([test "x$HOST_STATE_PERSIST_PATH" == "x"], \
+    [HOST_STATE_PERSIST_PATH="/var/lib/phosphor-state-manager/requestedHostTransition"])
+AC_DEFINE_UNQUOTED([HOST_STATE_PERSIST_PATH], ["$HOST_STATE_PERSIST_PATH"], \
+    [Path of file for storing requested host state.])
+
+AC_ARG_VAR(BOOT_COUNT_MAX_ALLOWED, [The maximum allowed reboot count])
+AS_IF([test "x$BOOT_COUNT_MAX_ALLOWED" == "x"], [BOOT_COUNT_MAX_ALLOWED=3])
+AC_DEFINE_UNQUOTED([BOOT_COUNT_MAX_ALLOWED], [$BOOT_COUNT_MAX_ALLOWED], [The maximum allowed reboot count])
 
 # Check for header files.
 AC_CHECK_HEADER(systemd/sd-bus.h, ,[AC_MSG_ERROR([Could not find systemd/sd-bus.h...systemd developement package required])])
