@@ -4,6 +4,7 @@
 #include <functional>
 #include <experimental/filesystem>
 #include <cereal/access.hpp>
+#include <cereal/cereal.hpp>
 #include <sdbusplus/bus.hpp>
 #include <phosphor-logging/log.hpp>
 #include <xyz/openbmc_project/State/Boot/Progress/server.hpp>
@@ -79,6 +80,12 @@ class Host : public HostInherit
 
         /** @brief Set value of HostTransition */
         Transition requestedHostTransition(Transition value) override;
+
+        /** @brief Set Value for boot progress */
+        ProgressStages bootProgress(ProgressStages value) override;
+
+        /** @brief Set Value for Operating System Status */
+        OSStatus operatingSystemState(OSStatus value) override;
 
         /** @brief Set value of CurrentHostState */
         HostState currentHostState(HostState value) override;
@@ -178,30 +185,48 @@ class Host : public HostInherit
          *
          *  @tparam Archive - Cereal archive type (binary in our case).
          *  @param[in] archive - reference to Cereal archive.
+         *  @param[in] version - Class version that enables handling
+         *                       a serialized data across code levels
          */
         template<class Archive>
-        void save(Archive& archive) const
+        void save(Archive& archive, const std::uint32_t version) const
         {
             archive(convertForMessage(sdbusplus::xyz::openbmc_project::
                                       State::server::Host::
-                                      requestedHostTransition()));
+                                      requestedHostTransition()),
+                    convertForMessage(sdbusplus::xyz::openbmc_project::
+                                      State::Boot::server::Progress::
+                                      bootProgress()),
+                    convertForMessage(sdbusplus::xyz::openbmc_project::
+                                      State::OperatingSystem::server::Status::
+                                      operatingSystemState()));
         }
 
         /** @brief Function required by Cereal to perform deserialization.
          *
          *  @tparam Archive - Cereal archive type (binary in our case).
          *  @param[in] archive - reference to Cereal archive.
+         *  @param[in] version - Class version that enables handling
+         *                       a serialized data across code levels
          */
         template<class Archive>
-        void load(Archive& archive)
+        void load(Archive& archive, const std::uint32_t version)
         {
-            std::string str;
-            archive(str);
-            auto reqTran = Host::convertTransitionFromString(str);
+            std::string reqTranState;
+            std::string bootProgress;
+            std::string osState;
+            archive(reqTranState, bootProgress, osState);
+            auto reqTran = Host::convertTransitionFromString(reqTranState);
             // When restoring, set the requested state with persistent value
             // but don't call the override which would execute it
             sdbusplus::xyz::openbmc_project::State::server::Host::
                 requestedHostTransition(reqTran);
+            sdbusplus::xyz::openbmc_project::State::Boot::server::Progress::
+                bootProgress(
+                    Host::convertProgressStagesFromString(bootProgress));
+            sdbusplus::xyz::openbmc_project::State::OperatingSystem::server::
+                Status::operatingSystemState(
+                    Host::convertOSStatusFromString(osState));
         }
 
         /** @brief Serialize and persist requested host state

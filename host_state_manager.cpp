@@ -16,6 +16,8 @@
 #include "host_state_manager.hpp"
 #include "config.h"
 
+// Register class version with Cereal
+CEREAL_CLASS_VERSION(phosphor::state::manager::Host, CLASS_VERSION);
 
 namespace phosphor
 {
@@ -297,14 +299,23 @@ fs::path Host::serialize(const fs::path& dir)
 
 bool Host::deserialize(const fs::path& path)
 {
-    if (fs::exists(path))
+    try
     {
-        std::ifstream is(path.c_str(), std::ios::in | std::ios::binary);
-        cereal::JSONInputArchive iarchive(is);
-        iarchive(*this);
-        return true;
+        if (fs::exists(path))
+        {
+            std::ifstream is(path.c_str(), std::ios::in | std::ios::binary);
+            cereal::JSONInputArchive iarchive(is);
+            iarchive(*this);
+            return true;
+        }
+        return false;
     }
-    return false;
+    catch(cereal::Exception& e)
+    {
+        log<level::ERR>(e.what());
+        fs::remove(path);
+        return false;
+    }
 }
 
 Host::Transition Host::requestedHostTransition(Transition value)
@@ -327,6 +338,20 @@ Host::Transition Host::requestedHostTransition(Transition value)
     executeTransition(value);
 
     auto retVal =  server::Host::requestedHostTransition(value);
+    serialize();
+    return retVal;
+}
+
+Host::ProgressStages Host::bootProgress(ProgressStages value)
+{
+    auto retVal = bootprogress::Progress::bootProgress(value);
+    serialize();
+    return retVal;
+}
+
+Host::OSStatus Host::operatingSystemState(OSStatus value)
+{
+    auto retVal = osstatus::Status::operatingSystemState(value);
     serialize();
     return retVal;
 }
