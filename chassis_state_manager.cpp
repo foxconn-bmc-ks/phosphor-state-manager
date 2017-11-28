@@ -1,6 +1,10 @@
 #include <sdbusplus/bus.hpp>
 #include <phosphor-logging/log.hpp>
 #include "chassis_state_manager.hpp"
+#include <stdlib.h>
+#include <time.h> 
+#include <unistd.h>
+#include<iostream>
 
 namespace phosphor
 {
@@ -157,6 +161,7 @@ int Chassis::sysStateChange(sdbusplus::message::message& msg)
     sdbusplus::message::object_path newStateObjPath;
     std::string newStateUnit{};
     std::string newStateResult{};
+    int delay_sec;
 
     //Read the msg and populate each variable
     msg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
@@ -172,6 +177,10 @@ int Chassis::sysStateChange(sdbusplus::message::message& msg)
             (newStateResult == "done") &&
             (stateActive(CHASSIS_STATE_POWERON_TGT)))
      {
+         srand (time(NULL));
+         delay_sec = (rand() % 10) + 1;
+         log<level::INFO>("Random Delay Power On!!!");
+         usleep(delay_sec * 1000 * 1000);
          log<level::INFO>("Received signal that power ON is complete");
          this->currentPowerState(server::Chassis::PowerState::On);
      }
