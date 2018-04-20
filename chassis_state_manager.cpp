@@ -19,22 +19,22 @@ namespace server = sdbusplus::xyz::openbmc_project::State::server;
 using namespace phosphor::logging;
 
 constexpr auto CHASSIS_STATE_POWEROFF_TGT = "obmc-chassis-poweroff@0.target";
-constexpr auto CHASSIS_STATE_HARD_POWEROFF_TGT = "obmc-chassis-hard-poweroff@0.target";
+constexpr auto CHASSIS_STATE_HARD_POWEROFF_TGT =
+    "obmc-chassis-hard-poweroff@0.target";
 constexpr auto CHASSIS_STATE_POWERON_TGT = "obmc-chassis-poweron@0.target";
 
 constexpr auto ACTIVE_STATE = "active";
 constexpr auto ACTIVATING_STATE = "activating";
 
 /* Map a transition to it's systemd target */
-const std::map<server::Chassis::Transition,std::string> SYSTEMD_TARGET_TABLE =
-{
+const std::map<server::Chassis::Transition, std::string> SYSTEMD_TARGET_TABLE =
+    {
         // Use the hard off target to ensure we shutdown immediately
         {server::Chassis::Transition::Off, CHASSIS_STATE_HARD_POWEROFF_TGT},
-        {server::Chassis::Transition::On, CHASSIS_STATE_POWERON_TGT}
-};
+        {server::Chassis::Transition::On, CHASSIS_STATE_POWERON_TGT}};
 
-constexpr auto SYSTEMD_SERVICE   = "org.freedesktop.systemd1";
-constexpr auto SYSTEMD_OBJ_PATH  = "/org/freedesktop/systemd1";
+constexpr auto SYSTEMD_SERVICE = "org.freedesktop.systemd1";
+constexpr auto SYSTEMD_OBJ_PATH = "/org/freedesktop/systemd1";
 constexpr auto SYSTEMD_INTERFACE = "org.freedesktop.systemd1.Manager";
 
 constexpr auto SYSTEMD_PROPERTY_IFACE = "org.freedesktop.DBus.Properties";
@@ -42,10 +42,8 @@ constexpr auto SYSTEMD_INTERFACE_UNIT = "org.freedesktop.systemd1.Unit";
 
 void Chassis::subscribeToSystemdSignals()
 {
-    auto method = this->bus.new_method_call(SYSTEMD_SERVICE,
-                                            SYSTEMD_OBJ_PATH,
-                                            SYSTEMD_INTERFACE,
-                                            "Subscribe");
+    auto method = this->bus.new_method_call(SYSTEMD_SERVICE, SYSTEMD_OBJ_PATH,
+                                            SYSTEMD_INTERFACE, "Subscribe");
     this->bus.call_noreply(method);
 
     return;
@@ -57,16 +55,15 @@ void Chassis::subscribeToSystemdSignals()
 void Chassis::determineInitialState()
 {
     sdbusplus::message::variant<int> pgood = -1;
-    auto method = this->bus.new_method_call("org.openbmc.control.Power",
-                                            "/org/openbmc/control/power0",
-                                            "org.freedesktop.DBus.Properties",
-                                            "Get");
+    auto method = this->bus.new_method_call(
+        "org.openbmc.control.Power", "/org/openbmc/control/power0",
+        "org.freedesktop.DBus.Properties", "Get");
 
     method.append("org.openbmc.control.Power", "pgood");
     auto reply = this->bus.call(method);
     reply.read(pgood);
 
-    if(pgood == 1)
+    if (pgood == 1)
     {
         log<level::INFO>("Initial Chassis State will be On",
                          entry("CHASSIS_CURRENT_POWER_STATE=%s",
@@ -90,10 +87,8 @@ void Chassis::executeTransition(Transition tranReq)
 {
     auto sysdTarget = SYSTEMD_TARGET_TABLE.find(tranReq)->second;
 
-    auto method = this->bus.new_method_call(SYSTEMD_SERVICE,
-                                            SYSTEMD_OBJ_PATH,
-                                            SYSTEMD_INTERFACE,
-                                            "StartUnit");
+    auto method = this->bus.new_method_call(SYSTEMD_SERVICE, SYSTEMD_OBJ_PATH,
+                                            SYSTEMD_INTERFACE, "StartUnit");
 
     method.append(sysdTarget);
     method.append("replace");
@@ -108,16 +103,14 @@ bool Chassis::stateActive(const std::string& target)
     sdbusplus::message::variant<std::string> currentState;
     sdbusplus::message::object_path unitTargetPath;
 
-    auto method = this->bus.new_method_call(SYSTEMD_SERVICE,
-                                            SYSTEMD_OBJ_PATH,
-                                            SYSTEMD_INTERFACE,
-                                            "GetUnit");
+    auto method = this->bus.new_method_call(SYSTEMD_SERVICE, SYSTEMD_OBJ_PATH,
+                                            SYSTEMD_INTERFACE, "GetUnit");
 
     method.append(target);
     auto result = this->bus.call(method);
 
-    //Check that the bus call didn't result in an error
-    if(result.is_method_error())
+    // Check that the bus call didn't result in an error
+    if (result.is_method_error())
     {
         log<level::ERR>("Error in bus call - could not resolve GetUnit for:",
                         entry(" %s", SYSTEMD_INTERFACE));
@@ -126,17 +119,16 @@ bool Chassis::stateActive(const std::string& target)
 
     result.read(unitTargetPath);
 
-    method = this->bus.new_method_call(SYSTEMD_SERVICE,
-                                       static_cast<const std::string&>
-                                           (unitTargetPath).c_str(),
-                                       SYSTEMD_PROPERTY_IFACE,
-                                       "Get");
+    method = this->bus.new_method_call(
+        SYSTEMD_SERVICE,
+        static_cast<const std::string&>(unitTargetPath).c_str(),
+        SYSTEMD_PROPERTY_IFACE, "Get");
 
     method.append(SYSTEMD_INTERFACE_UNIT, "ActiveState");
     result = this->bus.call(method);
 
-    //Check that the bus call didn't result in an error
-    if(result.is_method_error())
+    // Check that the bus call didn't result in an error
+    if (result.is_method_error())
     {
         log<level::ERR>("Error in bus call - could not resolve Get for:",
                         entry(" %s", SYSTEMD_PROPERTY_IFACE));
@@ -145,45 +137,43 @@ bool Chassis::stateActive(const std::string& target)
 
     result.read(currentState);
 
-    if(currentState != ACTIVE_STATE && currentState != ACTIVATING_STATE)
+    if (currentState != ACTIVE_STATE && currentState != ACTIVATING_STATE)
     {
-        //False - not active
+        // False - not active
         return false;
     }
-    //True - active
+    // True - active
     return true;
-
 }
 
 int Chassis::sysStateChange(sdbusplus::message::message& msg)
 {
-    uint32_t newStateID {};
+    uint32_t newStateID{};
     sdbusplus::message::object_path newStateObjPath;
     std::string newStateUnit{};
     std::string newStateResult{};
     int delay_sec;
 
-    //Read the msg and populate each variable
+    // Read the msg and populate each variable
     msg.read(newStateID, newStateObjPath, newStateUnit, newStateResult);
 
-    if((newStateUnit == CHASSIS_STATE_POWEROFF_TGT) &&
-       (newStateResult == "done") &&
-       (!stateActive(CHASSIS_STATE_POWERON_TGT)))
+    if ((newStateUnit == CHASSIS_STATE_POWEROFF_TGT) &&
+        (newStateResult == "done") && (!stateActive(CHASSIS_STATE_POWERON_TGT)))
     {
         log<level::INFO>("Received signal that power OFF is complete");
         this->currentPowerState(server::Chassis::PowerState::Off);
     }
-    else if((newStateUnit == CHASSIS_STATE_POWERON_TGT) &&
-            (newStateResult == "done") &&
-            (stateActive(CHASSIS_STATE_POWERON_TGT)))
-     {
-         srand (time(NULL));
-         delay_sec = (rand() % 10) + 1;
-         log<level::INFO>("Random Delay Power On!!!");
-         usleep(delay_sec * 1000 * 1000);
-         log<level::INFO>("Received signal that power ON is complete");
-         this->currentPowerState(server::Chassis::PowerState::On);
-     }
+    else if ((newStateUnit == CHASSIS_STATE_POWERON_TGT) &&
+             (newStateResult == "done") &&
+             (stateActive(CHASSIS_STATE_POWERON_TGT)))
+    {
+        srand (time(NULL));
+        delay_sec = (rand() % 10) + 1;
+        log<level::INFO>("Random Delay Power On!!!");
+        usleep(delay_sec * 1000 * 1000);
+        log<level::INFO>("Received signal that power ON is complete");
+        this->currentPowerState(server::Chassis::PowerState::On);
+    }
 
     return 0;
 }
