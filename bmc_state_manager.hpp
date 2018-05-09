@@ -83,8 +83,19 @@ class BMC : public BMCInherit
          */
         int bmcStateChange(sdbusplus::message::message& msg);
 
-        /** @brief Persistent sdbusplus DBus bus connection. **/
-        sdbusplus::bus::bus& bus;
+    /** @brief :
+     *     setBMCReadyStausLed :control SYS_BOOT_STATUS_LED_N
+     *         - As SYS_BOOT_STATUS_LED_N is light,
+     *           it means that BMC is not ready
+     *         - As SYS_BOOT_STATUS_LED_N is dark,
+     *           it means that BMC is ready
+     *
+     *  @param[in] ledStatus
+     */
+    void setBMCReadyStausLed(int ledStatus);
+
+    /** @brief Persistent sdbusplus DBus bus connection. **/
+    sdbusplus::bus::bus& bus;
 
         /** @brief Used to subscribe to dbus system state changes **/
         std::unique_ptr<sdbusplus::bus::match_t> stateSignal;

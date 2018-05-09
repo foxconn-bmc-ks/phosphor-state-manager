@@ -1,7 +1,9 @@
 #include <iostream>
 #include <string>
+#include <stdio.h>
 #include <phosphor-logging/log.hpp>
 #include "bmc_state_manager.hpp"
+#include "config.h"
 
 namespace phosphor
 {
@@ -177,9 +179,45 @@ BMC::BMCState BMC::currentBMCState(BMCState value)
             entry("CURRENT_BMC_STATE=0x%s",
                   convertForMessage(value).c_str()));
 
+    if (value == BMCState::Ready)
+        this->setBMCReadyStausLed(BMC_READY_STATUS_DARK);
+    else if(value == BMCState::NotReady)
+        this->setBMCReadyStausLed(BMC_READY_STATUS_LIGHT);
+
     return server::BMC::currentBMCState(value);
 }
 
+void BMC::setBMCReadyStausLed(int ledStatus)
+{
+    FILE *fp;
+    char buf[1024] = {0};
+    unsigned int buf_value = 0;
+
+    if ((fp = popen(BMC_READY_STATUS_CHECK_COMMAND, "r")) == NULL) {
+        std::cout << "setBMCReadyStausLed(): command error !!" << std::endl;
+        return ;
+    }
+    if (! fgets(buf, sizeof(buf), fp)) {
+        std::cout << "setBMCReadyStausLed(): read command error !!" << std::endl;
+        pclose(fp);
+        return ;
+    }
+    pclose(fp);
+
+    if (sscanf(buf, "0x%x", &buf_value) <= 0) {
+        std::cout << "setBMCReadyStausLed(): parse command value error !!" << std::endl;
+        return ;
+    }
+
+    buf_value &= ~(1 << BMC_READY_STATUS_GPIO_OFFSET);
+    buf_value |= (ledStatus << BMC_READY_STATUS_GPIO_OFFSET);
+
+    buf[0] = 0;
+    snprintf(buf, sizeof(buf), "%s 32 0x%x", BMC_READY_STATUS_CHECK_COMMAND, buf_value);
+    std::system(buf);
+
+    std::cout << "setBMCReadyStausLed():" << ledStatus << "," << buf << std::endl;
+}
 
 } // namespace manager
 } // namespace state

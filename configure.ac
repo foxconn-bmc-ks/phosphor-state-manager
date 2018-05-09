@@ -73,5 +73,10 @@ AC_ARG_VAR(CLASS_VERSION, [Class version to register with Cereal])
 AS_IF([test "x$CLASS_VERSION" == "x"], [CLASS_VERSION=1])
 AC_DEFINE_UNQUOTED([CLASS_VERSION], [$CLASS_VERSION], [Class version to register with Cereal])
 
+AC_DEFINE([BMC_READY_STATUS_CHECK_COMMAND], ["devmem 0x1e780000"], [get SYS_BOOT_STATUS_LED_N gpio pin command])
+AC_DEFINE([BMC_READY_STATUS_GPIO_OFFSET], [29], [get SYS_BOOT_STATUS_LED_N gpio offset, default as GPIOD5])
+AC_DEFINE([BMC_READY_STATUS_LIGHT], [0], [SYS_BOOT_STATUS_LED_N , which is inverse, is low as light])
+AC_DEFINE([BMC_READY_STATUS_DARK], [1], [SYS_BOOT_STATUS_LED_N , which is inverse, is high as dark])
+
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
